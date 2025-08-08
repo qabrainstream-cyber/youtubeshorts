@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 import requests
 import isodate
 from datetime import datetime, timezone
@@ -13,6 +13,21 @@ CHANNEL_ID = 'UCpMfyR38-yRAKiHmtJNRoNA'
 @app.route('/run', methods=['POST'])
 def run_short_checker():
     webhook_url = request.json.get("webhook_url")
+    target_date_str = request.json.get("date")
+
+    if not webhook_url or not target_date_str:
+        return make_response(jsonify({
+            "status": "error",
+            "message": "Missing webhook_url or date"
+        }), 400)
+
+    try:
+        target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return make_response(jsonify({
+            "status": "error",
+            "message": "Invalid date format. Use YYYY-MM-DD"
+        }), 400)
 
     def get_recent_videos():
         url = 'https://www.googleapis.com/youtube/v3/search'
@@ -60,9 +75,17 @@ def run_short_checker():
 
     for video in videos:
         video_id = video['id']['videoId']
+
         if video_id == last_sent_video_id:
             print(f"🟡 Already sent today’s short: {video_id}")
-            return jsonify({"status": "already_sent", "videoId": video_id})
+            response = make_response(jsonify({
+                "status": "already_sent",
+                "videoId": video_id,
+                "url": f"https://youtube.com/shorts/{video_id}"
+            }))
+            response.headers["Content-Type"] = "application/json"
+            response.headers["Content-Encoding"] = "identity"
+            return response
 
         details = get_video_details(video_id)
         if not details:
@@ -77,10 +100,8 @@ def run_short_checker():
 
             try:
                 published_dt = datetime.strptime(published_at, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
-                now = datetime.now(timezone.utc)
-
-                if published_dt.date() == now.date():
-                    # It's a new short published today
+                if published_dt.date() == target_date:
+                    # Valid short for the specified date
                     data = {
                         'videoId': video_id,
                         'title': snippet.get('title', ''),
@@ -90,16 +111,28 @@ def run_short_checker():
                     }
                     send_webhook(data)
                     update_last_sent_video_id(video_id)
-                    return jsonify({
+
+                    response = make_response(jsonify({
                         "status": "sent",
-                        "short_title": snippet.get('title', ''),
-                        "url": snippet.get('videoId', '')
-                        })
+                        "short_title": data['title'],
+                        "videoId": video_id,
+                        "url": data['url']
+                    }))
+                    response.headers["Content-Type"] = "application/json"
+                    response.headers["Content-Encoding"] = "identity"
+                    return response
+
             except Exception as e:
                 print(f"Date parsing error: {e}")
                 continue
 
-    return jsonify({"status": "no_new_short_today"})
+    response = make_response(jsonify({
+        "status": "no_short_found",
+        "date": target_date_str
+    }))
+    response.headers["Content-Type"] = "application/json"
+    response.headers["Content-Encoding"] = "identity"
+    return response
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000)
