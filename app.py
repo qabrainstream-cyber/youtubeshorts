@@ -1,12 +1,13 @@
 from flask import Flask, request, jsonify
 import requests
 import isodate
+from datetime import datetime, timezone
 
 app = Flask(__name__)
 
+# Replace these with your actual values
 API_KEY = 'AIzaSyBXv3F7SokEc3CEEN2w8y1NGFDDmcU7ALo'
 CHANNEL_ID = 'UCpMfyR38-yRAKiHmtJNRoNA'
-
 
 @app.route('/run', methods=['POST'])
 def run_short_checker():
@@ -51,22 +52,33 @@ def run_short_checker():
         if not details:
             continue
 
+        # Parse duration and check if Short
         duration_iso = details['contentDetails']['duration']
         duration = isodate.parse_duration(duration_iso).total_seconds()
 
         if duration <= 60:
             snippet = details['snippet']
-            data = {
-                'videoId': video_id,
-                'title': snippet.get('title', ''),
-                'description': snippet.get('description', ''),
-                'publishedAt': snippet.get('publishedAt', ''),
-                'url': f"https://youtube.com/shorts/{video_id}"
-            }
-            send_webhook(data)
-            return jsonify({"status": "sent", "short_title": snippet.get('title', '')})
+            published_at = snippet.get('publishedAt', '')
+            try:
+                published_dt = datetime.strptime(published_at, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+                now = datetime.now(timezone.utc)
 
-    return jsonify({"status": "no_short_found"})
+                if published_dt.date() == now.date():
+                    # It's a short published today
+                    data = {
+                        'videoId': video_id,
+                        'title': snippet.get('title', ''),
+                        'description': snippet.get('description', ''),
+                        'publishedAt': published_at,
+                        'url': f"https://youtube.com/shorts/{video_id}"
+                    }
+                    send_webhook(data)
+                    return jsonify({"status": "sent", "short_title": snippet.get('title', '')})
+            except Exception as e:
+                print(f"Date parsing error: {e}")
+                continue
+
+    return jsonify({"status": "no_short_found_today"})
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000)
