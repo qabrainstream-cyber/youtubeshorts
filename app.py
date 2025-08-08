@@ -3,6 +3,7 @@ import requests
 import isodate
 from datetime import datetime, timezone
 
+
 app = Flask(__name__)
 
 # Replace these with your actual values
@@ -92,7 +93,7 @@ def run_short_checker():
                     return jsonify({
                         "status": "sent",
                         "short_title": snippet.get('title', ''),
-                        "url": f"https://youtube.com/shorts/{video_id}"
+                        "url": snippet.get('videoId', '')
                         })
             except Exception as e:
                 print(f"Date parsing error: {e}")
