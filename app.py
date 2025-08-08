@@ -89,7 +89,11 @@ def run_short_checker():
                     }
                     send_webhook(data)
                     update_last_sent_video_id(video_id)
-                    return jsonify({"status": "sent", "videoId": video_id})
+                    return jsonify({
+                        "status": "sent",
+                        "short_title": snippet.get('title', ''),
+                        "url": f"https://youtube.com/shorts/{video_id}"
+                        })
             except Exception as e:
                 print(f"Date parsing error: {e}")
                 continue
