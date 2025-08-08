@@ -3,10 +3,9 @@ import requests
 import isodate
 from datetime import datetime, timezone
 
-
 app = Flask(__name__)
 
-# Replace these with your actual values
+# Your API key and channel ID
 API_KEY = 'AIzaSyBXv3F7SokEc3CEEN2w8y1NGFDDmcU7ALo'
 CHANNEL_ID = 'UCpMfyR38-yRAKiHmtJNRoNA'
 
@@ -29,103 +28,70 @@ def run_short_checker():
             "message": "Invalid date format. Use YYYY-MM-DD"
         }), 400)
 
-    def get_recent_videos():
-        url = 'https://www.googleapis.com/youtube/v3/search'
-        params = {
-            'part': 'id',
-            'channelId': CHANNEL_ID,
-            'order': 'date',
-            'maxResults': 10,
-            'type': 'video',
-            'key': API_KEY
-        }
-        response = requests.get(url, params=params)
-        return response.json().get('items', [])
+    # Get latest videos
+    search_url = 'https://www.googleapis.com/youtube/v3/search'
+    search_params = {
+        'part': 'id',
+        'channelId': CHANNEL_ID,
+        'order': 'date',
+        'maxResults': 10,
+        'type': 'video',
+        'key': API_KEY
+    }
+    search_res = requests.get(search_url, params=search_params).json()
+    video_items = search_res.get('items', [])
 
-    def get_video_details(video_id):
-        url = 'https://www.googleapis.com/youtube/v3/videos'
-        params = {
+    for item in video_items:
+        video_id = item['id']['videoId']
+
+        # Get video details
+        details_url = 'https://www.googleapis.com/youtube/v3/videos'
+        details_params = {
             'part': 'snippet,contentDetails',
             'id': video_id,
             'key': API_KEY
         }
-        response = requests.get(url, params=params)
-        items = response.json().get('items', [])
-        return items[0] if items else None
+        details_res = requests.get(details_url, params=details_params).json()
+        items = details_res.get('items', [])
+        if not items:
+            continue
 
-    def get_last_sent_video_id():
-        if os.path.exists(LAST_SENT_FILE):
-            with open(LAST_SENT_FILE, 'r') as f:
-                return f.read().strip()
-        return None
+        video = items[0]
+        snippet = video['snippet']
+        content = video['contentDetails']
+        published_at = snippet.get('publishedAt', '')
 
-    def update_last_sent_video_id(video_id):
-        with open(LAST_SENT_FILE, 'w') as f:
-            f.write(video_id)
-
-    def send_webhook(data):
         try:
-            res = requests.post(webhook_url, json=data)
-            print(f"✅ Webhook sent: {data['title']}")
+            published_dt = datetime.strptime(published_at, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
         except Exception as e:
-            print(f"❌ Webhook failed: {e}")
+            continue
 
-    last_sent_video_id = get_last_sent_video_id()
-    videos = get_recent_videos()
+        # Check if it's a short published on the target date
+        duration = isodate.parse_duration(content['duration']).total_seconds()
+        if duration <= 60 and published_dt.date() == target_date:
+            short_url = f"https://youtube.com/shorts/{video_id}"
+            title = snippet.get('title', '')
 
-    for video in videos:
-        video_id = video['id']['videoId']
+            # Send to webhook
+            try:
+                requests.post(webhook_url, json={
+                    "title": title,
+                    "url": short_url
+                })
+            except:
+                pass
 
-        if video_id == last_sent_video_id:
-            print(f"🟡 Already sent today’s short: {video_id}")
+            # Return response to Make
             response = make_response(jsonify({
-                "status": "already_sent",
-                "videoId": video_id,
-                "url": f"https://youtube.com/shorts/{video_id}"
+                "status": "sent",
+                "title": title,
+                "url": short_url
             }))
             response.headers["Content-Type"] = "application/json"
             response.headers["Content-Encoding"] = "identity"
             return response
 
-        details = get_video_details(video_id)
-        if not details:
-            continue
-
-        duration_iso = details['contentDetails']['duration']
-        duration = isodate.parse_duration(duration_iso).total_seconds()
-
-        if duration <= 60:
-            snippet = details['snippet']
-            published_at = snippet.get('publishedAt', '')
-
-            try:
-                published_dt = datetime.strptime(published_at, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
-                if published_dt.date() == target_date:
-                    # Valid short for the specified date
-                    data = {
-                        'videoId': video_id,
-                        'title': snippet.get('title', ''),
-                        'description': snippet.get('description', ''),
-                        'publishedAt': published_at,
-                        'url': f"https://youtube.com/shorts/{video_id}"
-                    }
-                    send_webhook(data)
-                    update_last_sent_video_id(video_id)
-
-                    response = make_response(jsonify({
-                        "status": "sent",
-                        "short_title": data['title'],
-                        "videoId": video_id,
-                        "url": data['url']
-                    }))
-                    response.headers["Content-Type"] = "application/json"
-                    response.headers["Content-Encoding"] = "identity"
-                    return response
-
-            except Exception as e:
-                print(f"Date parsing error: {e}")
-                continue
-
+    # No match found
     response = make_response(jsonify({
         "status": "no_short_found",
         "date": target_date_str
